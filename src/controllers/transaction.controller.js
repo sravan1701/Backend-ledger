@@ -4,7 +4,6 @@ const accountModel = require("../models/account.model");
 const userModel = require("../models/user.model");
 
 const emailService = require("../services/email.services");
-const { promises } = require("nodemailer/lib/xoauth2");
 
 /**
  * * -Create a new transaction
@@ -201,6 +200,8 @@ if (fromAccountId === toAccountId) {
         status: "PENDING",
       }
     );
+
+    await transaction.save({ session: session });
     const debitLedgerEntry = await ledgerModel.create(
       [
         {
@@ -229,7 +230,6 @@ if (fromAccountId === toAccountId) {
     );
 
     transaction.status = "COMPLETED";
-    await transaction.save({ session: session });
 
     await session.commitTransaction();
     session.endSession();
@@ -405,8 +405,57 @@ async function createInitialFundsTransaction(req, res) {
   }
 }
 
+
+async function getTransactionHistory(req, res) {
+    try {
+        const { accountId } = req.params;
+
+        // make sure account belongs to the logged-in user
+
+        
+        const account = await accountModel.findOne({
+            _id: accountId,
+            user: req.user._id,
+        });
+
+        if (!account) {
+            return res.status(404).json({ message: "Account not found" });
+        }
+
+        // fetch all ledger entries for this account, populate transaction details
+        const ledgerEntries = await ledgerModel
+            .find({ account: accountId })
+            .populate({
+                path: "transaction",
+                populate: [
+                    { path: "fromAccount", select: "accountType currency" },
+                    { path: "toAccount", select: "accountType currency" },
+                ],
+            })
+            .sort({ createdAt: -1 }); // latest first
+
+        const history = ledgerEntries.map((entry) => ({
+            type: entry.type,                          // DEBIT or CREDIT
+            amount: entry.amount,
+            status: entry.transaction.status,
+            date: entry.transaction.createdAt,
+            transactionId: entry.transaction._id,
+            from: entry.transaction.fromAccount,
+            to: entry.transaction.toAccount,
+        }));
+
+        return res.status(200).json({ accountId, history });
+    } catch (err) {
+        return res.status(500).json({
+            message: "Failed to fetch transaction history",
+            error: err.message,
+        });
+    }
+}
+
 module.exports = {
   createTransaction,
   createInitialFundsTransaction,
+  getTransactionHistory
 
 };
